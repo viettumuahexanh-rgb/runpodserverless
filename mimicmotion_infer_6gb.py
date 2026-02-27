@@ -38,6 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size.")
     parser.add_argument("--sample_stride", type=int, default=1, help="Frame sampling stride for DWPose.")
     parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument(
+        "--target_output_fps",
+        type=int,
+        default=0,
+        help="Optional final output FPS after generation. 0 disables post-resample.",
+    )
     parser.add_argument("--steps", type=int, default=35, help="Diffusion inference steps.")
     parser.add_argument("--guidance_scale", type=float, default=2.0)
     parser.add_argument("--noise_aug_strength", type=float, default=0.0)
@@ -182,6 +188,47 @@ def attach_audio_from_driving_video(output_video_path: str, driving_video_path: 
         return False
     temp_muxed.replace(output_path)
     return True
+
+
+def resample_output_fps(output_video_path: str, target_fps: int, prefer_gpu_video_codec: bool = True) -> bool:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        print("ffmpeg not found. Skipping fps resample.")
+        return False
+    target_fps = int(target_fps)
+    if target_fps <= 0:
+        return False
+
+    output_path = Path(output_video_path)
+    temp_resampled = output_path.with_suffix(".fps_resampled.mp4")
+
+    codec_order = ["h264_nvenc", "libx264"] if prefer_gpu_video_codec else ["libx264", "h264_nvenc"]
+    for codec in codec_order:
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            str(output_path),
+            "-an",
+            "-vf",
+            f"fps={target_fps}",
+            "-c:v",
+            codec,
+        ]
+        if codec == "h264_nvenc":
+            cmd += ["-preset", "p5", "-cq", "19", "-pix_fmt", "yuv420p"]
+        else:
+            cmd += ["-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"]
+        cmd.append(str(temp_resampled))
+
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            continue
+        if temp_resampled.exists() and temp_resampled.stat().st_size > 0:
+            temp_resampled.replace(output_path)
+            return True
+    return False
 
 
 def preprocess_dwpose(
@@ -337,6 +384,13 @@ def run_inference(args: argparse.Namespace) -> dict:
         fps=args.fps,
         prefer_gpu_video_codec=args.prefer_gpu_video_codec,
     )
+    fps_resampled = False
+    if int(getattr(args, "target_output_fps", 0) or 0) > 0 and int(args.target_output_fps) != int(args.fps):
+        fps_resampled = resample_output_fps(
+            args.output_video_path,
+            target_fps=int(args.target_output_fps),
+            prefer_gpu_video_codec=args.prefer_gpu_video_codec,
+        )
     audio_attached = False
     if args.keep_input_audio:
         audio_attached = attach_audio_from_driving_video(args.output_video_path, args.driving_video_path)
@@ -346,6 +400,9 @@ def run_inference(args: argparse.Namespace) -> dict:
         "output_video_path": args.output_video_path,
         "pose_preview_path": args.pose_preview_path,
         "num_generated_frames": int(frames[1:].shape[0]),
+        "internal_fps": int(args.fps),
+        "output_fps": int(getattr(args, "target_output_fps", 0) or args.fps),
+        "fps_resampled": bool(fps_resampled),
         "audio_attached": audio_attached,
     }
 

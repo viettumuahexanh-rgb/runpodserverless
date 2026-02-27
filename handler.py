@@ -282,12 +282,25 @@ def handler(job: dict) -> dict:
         sample_stride_input = job_input.get("sample_stride")
         fps_input = job_input.get("fps")
 
-        resolved_sample_stride = _coerce_int(
-            sample_stride_input,
-            1 if sync_to_input else profile_cfg["sample_stride"],
-        )
-        if sync_to_input and fps_input is None and video_meta["fps"]:
-            resolved_fps = max(1, int(round(video_meta["fps"])))
+        resolved_sample_stride = _coerce_int(sample_stride_input, profile_cfg["sample_stride"])
+        resolved_sample_stride = max(1, resolved_sample_stride)
+
+        source_fps = video_meta["fps"]
+        source_fps_int = max(1, int(round(source_fps))) if source_fps else None
+        target_output_fps_input = job_input.get("target_output_fps")
+        target_output_fps = _coerce_int(target_output_fps_input, 0) if target_output_fps_input is not None else 0
+
+        if sync_to_input:
+            # Keep duration close to input while reducing compute with sample_stride > 1.
+            if fps_input is None:
+                if source_fps_int:
+                    resolved_fps = max(1, int(round(source_fps_int / resolved_sample_stride)))
+                else:
+                    resolved_fps = profile_cfg["fps"]
+            else:
+                resolved_fps = _coerce_int(fps_input, profile_cfg["fps"])
+            if source_fps_int and target_output_fps <= 0:
+                target_output_fps = source_fps_int
         else:
             resolved_fps = _coerce_int(fps_input, profile_cfg["fps"])
 
@@ -303,6 +316,7 @@ def handler(job: dict) -> dict:
             batch_size=1,
             sample_stride=resolved_sample_stride,
             fps=resolved_fps,
+            target_output_fps=max(0, target_output_fps),
             steps=_coerce_int(job_input.get("steps"), profile_cfg["steps"]),
             guidance_scale=_coerce_float(job_input.get("guidance_scale"), profile_cfg["guidance_scale"]),
             noise_aug_strength=_coerce_float(job_input.get("noise_aug_strength"), profile_cfg["noise_aug_strength"]),
@@ -343,6 +357,7 @@ def handler(job: dict) -> dict:
                 "steps": args.steps,
                 "sample_stride": args.sample_stride,
                 "fps": args.fps,
+                "target_output_fps": args.target_output_fps,
                 "vae_decode_chunk_size": args.vae_decode_chunk_size,
                 "keep_input_audio": args.keep_input_audio,
                 "prefer_gpu_video_codec": args.prefer_gpu_video_codec,
