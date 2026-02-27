@@ -1,14 +1,5 @@
 #!/usr/bin/env python
-"""
-MimicMotion inference script tuned for 6GB VRAM GPUs (e.g., GTX 1660).
-
-Key optimizations:
-- Low-VRAM fp16 mode: model.to(device, dtype=torch.float16)
-- FP8 UNet quantization (via optimum-quanto if available)
-- Tiled/chunked VAE decoding
-- Default 512x512 generation with batch size 1
-- DWPose preprocessing from driving video before frame generation
-"""
+"""MimicMotion inference script for serverless deployment with tunable quality."""
 
 from __future__ import annotations
 
@@ -19,9 +10,10 @@ from types import SimpleNamespace
 from typing import Tuple
 
 import cv2
+import imageio.v2 as imageio
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageOps
 from torchvision.transforms.functional import to_pil_image
 
 from diffusers.utils.torch_utils import is_compiled_module
@@ -32,28 +24,28 @@ from mimicmotion.dwpose.preprocess import get_image_pose, get_video_pose
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Low-VRAM MimicMotion inference for 6GB GPUs.")
+    parser = argparse.ArgumentParser(description="MimicMotion inference for serverless GPUs.")
     parser.add_argument("--base_model_path", type=str, required=True, help="Path or HF model id for SVD base model.")
     parser.add_argument("--ckpt_path", type=str, required=True, help="Path to MimicMotion checkpoint (.pth).")
     parser.add_argument("--ref_image_path", type=str, required=True, help="Reference identity image.")
     parser.add_argument("--driving_video_path", type=str, required=True, help="Driving video for motion/pose.")
-    parser.add_argument("--output_video_path", type=str, default="outputs/mimicmotion_6gb.mp4")
+    parser.add_argument("--output_video_path", type=str, default="outputs/mimicmotion_out.mp4")
     parser.add_argument("--pose_preview_path", type=str, default="outputs/dwpose_preview.mp4")
-    parser.add_argument("--height", type=int, default=512, help="Output height (default: 512).")
-    parser.add_argument("--width", type=int, default=512, help="Output width (default: 512).")
-    parser.add_argument("--batch_size", type=int, default=1, help="Must stay 1 for 6GB VRAM mode.")
-    parser.add_argument("--sample_stride", type=int, default=2, help="Frame sampling stride for DWPose.")
-    parser.add_argument("--fps", type=int, default=7)
-    parser.add_argument("--steps", type=int, default=25, help="Diffusion inference steps.")
+    parser.add_argument("--height", type=int, default=1024, help="Output height (default: 1024).")
+    parser.add_argument("--width", type=int, default=576, help="Output width (default: 576).")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size.")
+    parser.add_argument("--sample_stride", type=int, default=1, help="Frame sampling stride for DWPose.")
+    parser.add_argument("--fps", type=int, default=15)
+    parser.add_argument("--steps", type=int, default=35, help="Diffusion inference steps.")
     parser.add_argument("--guidance_scale", type=float, default=2.0)
-    parser.add_argument("--noise_aug_strength", type=float, default=0.02)
-    parser.add_argument("--tile_size", type=int, default=16, help="Temporal tile size for denoising.")
-    parser.add_argument("--tile_overlap", type=int, default=4, help="Temporal overlap for denoising tiles.")
+    parser.add_argument("--noise_aug_strength", type=float, default=0.0)
+    parser.add_argument("--tile_size", type=int, default=32, help="Temporal tile size for denoising.")
+    parser.add_argument("--tile_overlap", type=int, default=8, help="Temporal overlap for denoising tiles.")
     parser.add_argument(
         "--vae_decode_chunk_size",
         type=int,
-        default=2,
-        help="VAE decode chunk size (small values reduce VRAM, but are slower).",
+        default=8,
+        help="VAE decode chunk size. Increase on strong GPUs for faster decoding.",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable_fp8", action="store_true", help="Disable FP8 UNet quantization.")
@@ -62,7 +54,7 @@ def parse_args() -> argparse.Namespace:
 
 def resize_ref_image(ref_image_path: str, width: int, height: int) -> np.ndarray:
     image = Image.open(ref_image_path).convert("RGB")
-    image = image.resize((width, height), Image.Resampling.BICUBIC)
+    image = ImageOps.fit(image, (width, height), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
     return np.asarray(image, dtype=np.uint8)
 
 
@@ -78,11 +70,22 @@ def write_video(frames: np.ndarray, output_path: str, fps: int) -> None:
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    height, width = frames_hwc.shape[1], frames_hwc.shape[2]
-    writer = cv2.VideoWriter(output.as_posix(), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
-    for frame in frames_hwc:
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    writer.release()
+    try:
+        imageio.mimwrite(
+            output.as_posix(),
+            frames_hwc,
+            fps=fps,
+            codec="libx264",
+            quality=8,
+            macro_block_size=None,
+        )
+    except Exception:
+        # Fallback to OpenCV if ffmpeg/imageio backend is unavailable.
+        height, width = frames_hwc.shape[1], frames_hwc.shape[2]
+        writer = cv2.VideoWriter(output.as_posix(), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+        for frame in frames_hwc:
+            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        writer.release()
 
 
 def preprocess_dwpose(
@@ -121,6 +124,7 @@ def apply_low_vram_mode(pipeline, device: torch.device) -> None:
         if module is not None and hasattr(module, "to"):
             # Required Low-VRAM mode: fp16 module weights on target device.
             module.to(device, dtype=target_dtype)
+    # Keep attention slicing for memory safety on constrained GPUs.
     if hasattr(pipeline, "enable_attention_slicing"):
         pipeline.enable_attention_slicing(1)
 
@@ -168,7 +172,7 @@ def patch_tiled_vae_decode(pipeline, default_chunk_size: int = 2) -> None:
 
 def run_inference(args: argparse.Namespace) -> dict:
     if args.batch_size != 1:
-        raise ValueError("For 6GB VRAM mode, batch_size must be 1.")
+        raise ValueError("MimicMotion pipeline currently expects batch_size=1.")
     if args.height % 8 != 0 or args.width % 8 != 0:
         raise ValueError("height/width must be divisible by 8.")
 

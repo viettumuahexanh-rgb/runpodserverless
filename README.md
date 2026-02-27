@@ -6,7 +6,7 @@
 
 ## What this worker does
 - Runs MimicMotion inference on GPU.
-- Keeps default low-VRAM config: `512x512`, `batch_size=1`, tiled VAE decode.
+- Uses `full` quality by default on cloud GPUs (`576x1024`, higher steps).
 - Preprocesses DWPose from driving video before generation.
 - Attempts FP8 quantization for UNet (`optimum-quanto`), unless `disable_fp8=true`.
 
@@ -34,6 +34,7 @@ docker push <dockerhub-user>/mimicmotion-runpod:0.1.0
 - `HF_TOKEN`: token for private/gated Hugging Face repos.
 - `BASE_MODEL_PATH`: default is `stabilityai/stable-video-diffusion-img2vid-xt`.
 - `MODELS_ROOT`: default is `/runpod-volume/models`.
+- `DEFAULT_QUALITY_PROFILE`: `full` (default) / `balanced` / `low_vram`.
 
 ## API input example
 ```json
@@ -41,14 +42,15 @@ docker push <dockerhub-user>/mimicmotion-runpod:0.1.0
   "input": {
     "ref_image_url": "https://.../ref.png",
     "driving_video_url": "https://.../drive.mp4",
-    "steps": 12,
-    "sample_stride": 2,
-    "fps": 7,
+    "quality_profile": "full",
+    "steps": 35,
+    "sample_stride": 1,
+    "fps": 15,
     "seed": 42,
-    "width": 512,
-    "height": 512,
-    "vae_decode_chunk_size": 2,
-    "disable_fp8": false
+    "width": 576,
+    "height": 1024,
+    "vae_decode_chunk_size": 8,
+    "disable_fp8": true
   }
 }
 ```

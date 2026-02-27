@@ -20,6 +20,54 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MIMICMOTION_DIR = Path(os.getenv("MIMICMOTION_DIR", str(BASE_DIR / "MimicMotion")))
 
 
+def _profile_defaults(profile: str) -> dict:
+    name = (profile or "").strip().lower()
+    if name in {"low", "low_vram", "6gb", "vram6"}:
+        return {
+            "profile": "low_vram",
+            "width": 512,
+            "height": 512,
+            "sample_stride": 2,
+            "fps": 7,
+            "steps": 25,
+            "guidance_scale": 2.0,
+            "noise_aug_strength": 0.02,
+            "tile_size": 16,
+            "tile_overlap": 4,
+            "vae_decode_chunk_size": 2,
+            "disable_fp8": False,
+        }
+    if name in {"balanced", "medium"}:
+        return {
+            "profile": "balanced",
+            "width": 576,
+            "height": 1024,
+            "sample_stride": 1,
+            "fps": 12,
+            "steps": 30,
+            "guidance_scale": 2.0,
+            "noise_aug_strength": 0.0,
+            "tile_size": 24,
+            "tile_overlap": 6,
+            "vae_decode_chunk_size": 4,
+            "disable_fp8": True,
+        }
+    return {
+        "profile": "full",
+        "width": 576,
+        "height": 1024,
+        "sample_stride": 1,
+        "fps": 15,
+        "steps": 35,
+        "guidance_scale": 2.0,
+        "noise_aug_strength": 0.0,
+        "tile_size": 32,
+        "tile_overlap": 8,
+        "vae_decode_chunk_size": 8,
+        "disable_fp8": True,
+    }
+
+
 def _coerce_int(value, default: int) -> int:
     try:
         return int(value)
@@ -176,6 +224,9 @@ def handler(job: dict) -> dict:
     work_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        profile_name = str(job_input.get("quality_profile") or os.getenv("DEFAULT_QUALITY_PROFILE", "full"))
+        profile_cfg = _profile_defaults(profile_name)
+
         models_root = _ensure_models_root()
         ckpt_path = Path(job_input.get("ckpt_path") or _ensure_checkpoint(models_root))
         dwpose_dir = Path(job_input.get("dwpose_dir") or _ensure_dwpose(models_root))
@@ -202,19 +253,19 @@ def handler(job: dict) -> dict:
             driving_video_path=str(driving_video_path),
             output_video_path=str(output_video_path),
             pose_preview_path=str(pose_preview_path),
-            height=_coerce_int(job_input.get("height"), 512),
-            width=_coerce_int(job_input.get("width"), 512),
+            height=_coerce_int(job_input.get("height"), profile_cfg["height"]),
+            width=_coerce_int(job_input.get("width"), profile_cfg["width"]),
             batch_size=1,
-            sample_stride=_coerce_int(job_input.get("sample_stride"), 2),
-            fps=_coerce_int(job_input.get("fps"), 7),
-            steps=_coerce_int(job_input.get("steps"), 25),
-            guidance_scale=_coerce_float(job_input.get("guidance_scale"), 2.0),
-            noise_aug_strength=_coerce_float(job_input.get("noise_aug_strength"), 0.02),
-            tile_size=_coerce_int(job_input.get("tile_size"), 16),
-            tile_overlap=_coerce_int(job_input.get("tile_overlap"), 4),
-            vae_decode_chunk_size=_coerce_int(job_input.get("vae_decode_chunk_size"), 2),
+            sample_stride=_coerce_int(job_input.get("sample_stride"), profile_cfg["sample_stride"]),
+            fps=_coerce_int(job_input.get("fps"), profile_cfg["fps"]),
+            steps=_coerce_int(job_input.get("steps"), profile_cfg["steps"]),
+            guidance_scale=_coerce_float(job_input.get("guidance_scale"), profile_cfg["guidance_scale"]),
+            noise_aug_strength=_coerce_float(job_input.get("noise_aug_strength"), profile_cfg["noise_aug_strength"]),
+            tile_size=_coerce_int(job_input.get("tile_size"), profile_cfg["tile_size"]),
+            tile_overlap=_coerce_int(job_input.get("tile_overlap"), profile_cfg["tile_overlap"]),
+            vae_decode_chunk_size=_coerce_int(job_input.get("vae_decode_chunk_size"), profile_cfg["vae_decode_chunk_size"]),
             seed=_coerce_int(job_input.get("seed"), 42),
-            disable_fp8=_coerce_bool(job_input.get("disable_fp8"), False),
+            disable_fp8=_coerce_bool(job_input.get("disable_fp8"), profile_cfg["disable_fp8"]),
         )
 
         old_cwd = Path.cwd()
@@ -238,10 +289,12 @@ def handler(job: dict) -> dict:
             "pose_preview_bytes": pose_preview_path.stat().st_size,
             "fp8_enabled": not args.disable_fp8,
             "config": {
+                "quality_profile": profile_cfg["profile"],
                 "width": args.width,
                 "height": args.height,
                 "steps": args.steps,
                 "sample_stride": args.sample_stride,
+                "fps": args.fps,
                 "vae_decode_chunk_size": args.vae_decode_chunk_size,
             },
             "inference": infer_result,
