@@ -3,9 +3,11 @@
 ## Docker location
 - Docker image definition is at `runpod_serverless/Dockerfile`.
 - Worker entrypoint is `runpod_serverless/handler.py`.
+- Base image is `nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04` to match `onnxruntime-gpu==1.18.1`.
 
 ## What this worker does
 - Runs MimicMotion inference on GPU.
+- Enforces GPU for DWPose on CUDA workers (fails fast if ONNX CUDA provider is broken).
 - Uses `full` quality by default on cloud GPUs (`576x1024`, higher steps).
 - Preprocesses DWPose from driving video before generation.
 - Attempts FP8 quantization for UNet (`optimum-quanto`), unless `disable_fp8=true`.

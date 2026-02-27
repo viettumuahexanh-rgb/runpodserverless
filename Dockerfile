@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,8 +17,8 @@ COPY . /workspace
 # Pin CUDA wheels known to work with MimicMotion on RunPod.
 RUN python3 -m pip install --no-cache-dir --upgrade pip && \
     python3 -m pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cu121 \
-    torch==2.3.1+cu121 torchvision==0.18.1+cu121 && \
+    --index-url https://download.pytorch.org/whl/cu118 \
+    torch==2.3.1+cu118 torchvision==0.18.1+cu118 && \
     if [ -f /workspace/requirements.txt ]; then \
       python3 -m pip install --no-cache-dir -r /workspace/requirements.txt; \
     elif [ -f /workspace/runpod_serverless/requirements.txt ]; then \

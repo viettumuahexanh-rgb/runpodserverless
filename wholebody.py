@@ -6,27 +6,48 @@ from .onnxpose import inference_pose
 
 
 class Wholebody:
-    """Detect human pose by DWPose with CUDA provider fallback."""
+    """Detect human pose by DWPose with strict GPU mode on CUDA devices."""
 
     def __init__(self, model_det, model_pose, device="cpu"):
         available = ort.get_available_providers()
-        if str(device).startswith("cuda") and "CUDAExecutionProvider" in available:
+        if str(device).startswith("cuda"):
+            if "CUDAExecutionProvider" not in available:
+                raise RuntimeError(
+                    "DWPose requires CUDAExecutionProvider, but it is unavailable in onnxruntime. "
+                    f"Available providers: {available}"
+                )
+
             providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
             provider_options = [{"device_id": 0}, {}]
+            try:
+                self.session_det = ort.InferenceSession(
+                    path_or_bytes=model_det,
+                    providers=providers,
+                    provider_options=provider_options,
+                )
+                self.session_pose = ort.InferenceSession(
+                    path_or_bytes=model_pose,
+                    providers=providers,
+                    provider_options=provider_options,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to initialize DWPose on CUDAExecutionProvider. "
+                    "This usually means CUDA/onnxruntime library mismatch in the container."
+                ) from exc
+            self.providers = providers
         else:
             providers = ["CPUExecutionProvider"]
-            provider_options = None
-
-        self.session_det = ort.InferenceSession(
-            path_or_bytes=model_det,
-            providers=providers,
-            provider_options=provider_options,
-        )
-        self.session_pose = ort.InferenceSession(
-            path_or_bytes=model_pose,
-            providers=providers,
-            provider_options=provider_options,
-        )
+            self.session_det = ort.InferenceSession(
+                path_or_bytes=model_det,
+                providers=providers,
+            )
+            self.session_pose = ort.InferenceSession(
+                path_or_bytes=model_pose,
+                providers=providers,
+            )
+            self.providers = providers
+        print(f"DWPose ORT providers in use: {self.providers}")
 
     def __call__(self, oriImg):
         det_result = inference_detector(self.session_det, oriImg)
