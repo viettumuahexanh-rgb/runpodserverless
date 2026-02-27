@@ -125,9 +125,9 @@ def _probe_video_metadata(video_path: Path) -> dict:
     }
 
 
-def _align_to_multiple_of_8(value: int) -> int:
-    aligned = int(round(value / 8.0) * 8)
-    return max(8, aligned)
+def _align_to_multiple_of_64(value: int) -> int:
+    aligned = int(round(value / 64.0) * 64)
+    return max(64, aligned)
 
 
 def _optional_positive_int(value) -> int | None:
@@ -350,25 +350,25 @@ def handler(job: dict) -> dict:
         source_h = video_meta.get("height")
 
         if width_input and height_input:
-            resolved_width = _align_to_multiple_of_8(width_input)
-            resolved_height = _align_to_multiple_of_8(height_input)
+            resolved_width = _align_to_multiple_of_64(width_input)
+            resolved_height = _align_to_multiple_of_64(height_input)
         elif width_input:
-            resolved_width = _align_to_multiple_of_8(width_input)
+            resolved_width = _align_to_multiple_of_64(width_input)
             if source_w and source_h:
                 aspect_height = int(round((float(source_h) / float(source_w)) * resolved_width))
-                resolved_height = _align_to_multiple_of_8(aspect_height)
+                resolved_height = _align_to_multiple_of_64(aspect_height)
             else:
-                resolved_height = _align_to_multiple_of_8(profile_cfg["height"])
+                resolved_height = _align_to_multiple_of_64(profile_cfg["height"])
         elif height_input:
-            resolved_height = _align_to_multiple_of_8(height_input)
+            resolved_height = _align_to_multiple_of_64(height_input)
             if source_w and source_h:
                 aspect_width = int(round((float(source_w) / float(source_h)) * resolved_height))
-                resolved_width = _align_to_multiple_of_8(aspect_width)
+                resolved_width = _align_to_multiple_of_64(aspect_width)
             else:
-                resolved_width = _align_to_multiple_of_8(profile_cfg["width"])
+                resolved_width = _align_to_multiple_of_64(profile_cfg["width"])
         else:
-            resolved_width = _align_to_multiple_of_8(profile_cfg["width"])
-            resolved_height = _align_to_multiple_of_8(profile_cfg["height"])
+            resolved_width = _align_to_multiple_of_64(profile_cfg["width"])
+            resolved_height = _align_to_multiple_of_64(profile_cfg["height"])
 
         args = SimpleNamespace(
             base_model_path=str(job_input.get("base_model_path") or os.getenv("BASE_MODEL_PATH", "stabilityai/stable-video-diffusion-img2vid-xt")),
