@@ -109,16 +109,33 @@ def _coerce_bool(value, default: bool = False) -> bool:
 def _probe_video_metadata(video_path: Path) -> dict:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        return {"fps": None, "frame_count": None}
+        return {"fps": None, "frame_count": None, "width": None, "height": None}
     try:
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     finally:
         cap.release()
     return {
         "fps": fps if fps > 0 else None,
         "frame_count": frame_count if frame_count > 0 else None,
+        "width": width if width > 0 else None,
+        "height": height if height > 0 else None,
     }
+
+
+def _align_to_multiple_of_8(value: int) -> int:
+    aligned = int(round(value / 8.0) * 8)
+    return max(8, aligned)
+
+
+def _optional_positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _download_file(url: str, dst_path: Path) -> Path:
@@ -327,6 +344,32 @@ def handler(job: dict) -> dict:
         else:
             resolved_fps = _coerce_int(fps_input, profile_cfg["fps"])
 
+        width_input = _optional_positive_int(job_input.get("width"))
+        height_input = _optional_positive_int(job_input.get("height"))
+        source_w = video_meta.get("width")
+        source_h = video_meta.get("height")
+
+        if width_input and height_input:
+            resolved_width = _align_to_multiple_of_8(width_input)
+            resolved_height = _align_to_multiple_of_8(height_input)
+        elif width_input:
+            resolved_width = _align_to_multiple_of_8(width_input)
+            if source_w and source_h:
+                aspect_height = int(round((float(source_h) / float(source_w)) * resolved_width))
+                resolved_height = _align_to_multiple_of_8(aspect_height)
+            else:
+                resolved_height = _align_to_multiple_of_8(profile_cfg["height"])
+        elif height_input:
+            resolved_height = _align_to_multiple_of_8(height_input)
+            if source_w and source_h:
+                aspect_width = int(round((float(source_w) / float(source_h)) * resolved_height))
+                resolved_width = _align_to_multiple_of_8(aspect_width)
+            else:
+                resolved_width = _align_to_multiple_of_8(profile_cfg["width"])
+        else:
+            resolved_width = _align_to_multiple_of_8(profile_cfg["width"])
+            resolved_height = _align_to_multiple_of_8(profile_cfg["height"])
+
         args = SimpleNamespace(
             base_model_path=str(job_input.get("base_model_path") or os.getenv("BASE_MODEL_PATH", "stabilityai/stable-video-diffusion-img2vid-xt")),
             ckpt_path=str(ckpt_path),
@@ -334,8 +377,8 @@ def handler(job: dict) -> dict:
             driving_video_path=str(driving_video_path),
             output_video_path=str(output_video_path),
             pose_preview_path=str(pose_preview_path),
-            height=_coerce_int(job_input.get("height"), profile_cfg["height"]),
-            width=_coerce_int(job_input.get("width"), profile_cfg["width"]),
+            height=resolved_height,
+            width=resolved_width,
             batch_size=1,
             sample_stride=resolved_sample_stride,
             fps=resolved_fps,
@@ -388,6 +431,8 @@ def handler(job: dict) -> dict:
             "input_video": {
                 "source_fps": video_meta["fps"],
                 "source_frame_count": video_meta["frame_count"],
+                "source_width": video_meta["width"],
+                "source_height": video_meta["height"],
             },
             "inference": infer_result,
         }
