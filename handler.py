@@ -164,6 +164,22 @@ def _resolve_input_path(
     return dst_path
 
 
+def _resolve_input_with_fallback(
+    primary_value: str | None,
+    fallback_value: str | None,
+    dst_path: Path,
+    label: str,
+) -> Path:
+    try:
+        return _resolve_input_path(primary_value, dst_path)
+    except requests.HTTPError as exc:
+        status = getattr(exc.response, "status_code", None)
+        if status == 401 and fallback_value:
+            print(f"{label}: primary URL unauthorized (401), retrying with fallback URL.")
+            return _resolve_input_path(fallback_value, dst_path)
+        raise
+
+
 def _pick_input(job_input: dict, keys: list[str]) -> str | None:
     for key in keys:
         value = job_input.get(key)
@@ -272,8 +288,15 @@ def handler(job: dict) -> dict:
 
         ref_ext = Path(urlparse(ref_value).path).suffix or ".png"
         video_ext = Path(urlparse(drive_value).path).suffix or ".mp4"
-        ref_image_path = _resolve_input_path(ref_value, work_dir / f"ref{ref_ext}")
-        driving_video_path = _resolve_input_path(drive_value, work_dir / f"drive{video_ext}")
+        ref_fallback_value = _pick_input(job_input, ["ref_image_fallback_url"])
+        drive_fallback_value = _pick_input(job_input, ["driving_video_fallback_url"])
+        ref_image_path = _resolve_input_with_fallback(ref_value, ref_fallback_value, work_dir / f"ref{ref_ext}", "ref_image")
+        driving_video_path = _resolve_input_with_fallback(
+            drive_value,
+            drive_fallback_value,
+            work_dir / f"drive{video_ext}",
+            "driving_video",
+        )
         video_meta = _probe_video_metadata(driving_video_path)
 
         output_video_path = Path(job_input.get("output_video_path") or (work_dir / "output.mp4"))
