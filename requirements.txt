@@ -1,0 +1,13 @@
+diffusers==0.27.0
+transformers==4.32.1
+decord==0.6.0
+einops==0.8.0
+omegaconf==2.3.0
+opencv-python-headless==4.8.1.78
+onnxruntime-gpu==1.18.1
+accelerate==0.32.0
+huggingface-hub==0.23.2
+optimum-quanto==0.2.1
+runpod
+requests==2.32.5
+Pillow==11.3.0
