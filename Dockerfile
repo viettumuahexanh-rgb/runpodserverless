@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libgl1 \
     libglib2.0-0 \
+    cuda-nvrtc-11-8 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
@@ -27,6 +28,11 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip && \
       echo "requirements.txt not found in build context"; \
       ls -la /workspace; \
       exit 1; \
+    fi
+
+RUN set -eux; \
+    if [ -f /usr/local/cuda/lib64/libnvrtc.so.11.2 ] && [ ! -f /usr/local/cuda/lib64/libnvrtc.so ]; then \
+      ln -s /usr/local/cuda/lib64/libnvrtc.so.11.2 /usr/local/cuda/lib64/libnvrtc.so; \
     fi
 
 RUN set -eux; \
@@ -60,6 +66,7 @@ RUN set -eux; \
     fi
 
 ENV PYTHONPATH="/workspace:/workspace/MimicMotion"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
 ENV HF_HOME="/runpod-volume/hf"
 ENV TRANSFORMERS_CACHE="/runpod-volume/hf/transformers"
 ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:128"
