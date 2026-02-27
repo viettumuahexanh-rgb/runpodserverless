@@ -20,6 +20,11 @@ docker build -f runpod_serverless/Dockerfile -t <dockerhub-user>/mimicmotion-run
 docker push <dockerhub-user>/mimicmotion-runpod:0.1.0
 ```
 
+## RunPod GitHub build settings (important)
+- `Dockerfile Path`: `runpod_serverless/Dockerfile`
+- `Build Context`: repo root (`.`) is recommended.
+- If your context is accidentally `runpod_serverless`, this Dockerfile now still works.
+
 ## Create RunPod Serverless endpoint
 1. RunPod Console -> `Serverless` -> `New Endpoint`.
 2. Container image: `<dockerhub-user>/mimicmotion-runpod:0.1.0`.
