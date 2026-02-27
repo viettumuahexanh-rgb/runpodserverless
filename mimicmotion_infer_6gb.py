@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Tuple
@@ -49,6 +51,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--disable_fp8", action="store_true", help="Disable FP8 UNet quantization.")
+    parser.add_argument(
+        "--prefer_gpu_video_codec",
+        action="store_true",
+        default=True,
+        help="Prefer NVENC for output encoding when ffmpeg supports it.",
+    )
+    parser.add_argument("--no_gpu_video_codec", dest="prefer_gpu_video_codec", action="store_false")
+    parser.add_argument(
+        "--keep_input_audio",
+        action="store_true",
+        default=True,
+        help="Attach audio track from driving video to generated output when available.",
+    )
+    parser.add_argument("--no_input_audio", dest="keep_input_audio", action="store_false")
     return parser.parse_args()
 
 
@@ -58,7 +74,46 @@ def resize_ref_image(ref_image_path: str, width: int, height: int) -> np.ndarray
     return np.asarray(image, dtype=np.uint8)
 
 
-def write_video(frames: np.ndarray, output_path: str, fps: int) -> None:
+def _write_video_ffmpeg_nvenc(frames_hwc: np.ndarray, output_path: str, fps: int) -> bool:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        return False
+    height, width = frames_hwc.shape[1], frames_hwc.shape[2]
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",
+        "-an",
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p5",
+        "-cq",
+        "19",
+        "-pix_fmt",
+        "yuv420p",
+        output_path,
+    ]
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.stdin.write(frames_hwc.tobytes())
+        proc.stdin.close()
+        ret = proc.wait()
+        return ret == 0 and Path(output_path).exists() and Path(output_path).stat().st_size > 0
+    except Exception:
+        return False
+
+
+def write_video(frames: np.ndarray, output_path: str, fps: int, prefer_gpu_video_codec: bool = True) -> None:
     if frames.ndim != 4:
         raise ValueError(f"Expected 4D frames, got {frames.shape}")
     if frames.shape[-1] == 3:
@@ -70,6 +125,9 @@ def write_video(frames: np.ndarray, output_path: str, fps: int) -> None:
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    if prefer_gpu_video_codec:
+        if _write_video_ffmpeg_nvenc(frames_hwc, output.as_posix(), fps):
+            return
     try:
         imageio.mimwrite(
             output.as_posix(),
@@ -86,6 +144,44 @@ def write_video(frames: np.ndarray, output_path: str, fps: int) -> None:
         for frame in frames_hwc:
             writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         writer.release()
+
+
+def attach_audio_from_driving_video(output_video_path: str, driving_video_path: str) -> bool:
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        print("ffmpeg not found. Skipping audio mux.")
+        return False
+
+    output_path = Path(output_video_path)
+    temp_muxed = output_path.with_suffix(".with_audio.mp4")
+    cmd = [
+        ffmpeg_bin,
+        "-y",
+        "-i",
+        str(output_path),
+        "-i",
+        driving_video_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0?",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-shortest",
+        str(temp_muxed),
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as exc:
+        print(f"Audio mux failed, keeping silent output. Reason: {exc}")
+        return False
+
+    if not temp_muxed.exists() or temp_muxed.stat().st_size <= 0:
+        return False
+    temp_muxed.replace(output_path)
+    return True
 
 
 def preprocess_dwpose(
@@ -110,7 +206,7 @@ def preprocess_dwpose(
         video_pose = np.stack(resized_pose, axis=0)
 
     pose_pixels = np.concatenate([np.expand_dims(image_pose, 0), video_pose], axis=0)
-    write_video(pose_pixels.astype(np.uint8), pose_preview_path, fps=fps)
+    write_video(pose_pixels.astype(np.uint8), pose_preview_path, fps=fps, prefer_gpu_video_codec=False)
 
     pose_tensor = torch.from_numpy(pose_pixels.copy()).float() / 127.5 - 1.0
     image_tensor = torch.from_numpy(ref_image_np[None].copy()).permute(0, 3, 1, 2).float() / 127.5 - 1.0
@@ -235,13 +331,22 @@ def run_inference(args: argparse.Namespace) -> dict:
         raise RuntimeError(f"Unexpected output frame shape: {tuple(frames.shape)}")
 
     # Drop the first frame (reference image frame) to keep only generated motion frames.
-    write_video(frames[1:], args.output_video_path, fps=args.fps)
+    write_video(
+        frames[1:],
+        args.output_video_path,
+        fps=args.fps,
+        prefer_gpu_video_codec=args.prefer_gpu_video_codec,
+    )
+    audio_attached = False
+    if args.keep_input_audio:
+        audio_attached = attach_audio_from_driving_video(args.output_video_path, args.driving_video_path)
     print(f"Saved generated video: {args.output_video_path}")
     print(f"Saved DWPose preview video: {args.pose_preview_path}")
     return {
         "output_video_path": args.output_video_path,
         "pose_preview_path": args.pose_preview_path,
         "num_generated_frames": int(frames[1:].shape[0]),
+        "audio_attached": audio_attached,
     }
 
 

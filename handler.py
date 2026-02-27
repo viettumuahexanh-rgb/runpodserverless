@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
+import cv2
 import requests
 import runpod
 from huggingface_hub import hf_hub_download
@@ -52,6 +53,21 @@ def _profile_defaults(profile: str) -> dict:
             "vae_decode_chunk_size": 4,
             "disable_fp8": True,
         }
+    if name in {"ultra", "hq", "max"}:
+        return {
+            "profile": "ultra",
+            "width": 576,
+            "height": 1024,
+            "sample_stride": 1,
+            "fps": 15,
+            "steps": 45,
+            "guidance_scale": 2.0,
+            "noise_aug_strength": 0.0,
+            "tile_size": 48,
+            "tile_overlap": 12,
+            "vae_decode_chunk_size": 8,
+            "disable_fp8": True,
+        }
     return {
         "profile": "full",
         "width": 576,
@@ -88,6 +104,21 @@ def _coerce_bool(value, default: bool = False) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _probe_video_metadata(video_path: Path) -> dict:
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return {"fps": None, "frame_count": None}
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    finally:
+        cap.release()
+    return {
+        "fps": fps if fps > 0 else None,
+        "frame_count": frame_count if frame_count > 0 else None,
+    }
 
 
 def _download_file(url: str, dst_path: Path) -> Path:
@@ -226,6 +257,7 @@ def handler(job: dict) -> dict:
     try:
         profile_name = str(job_input.get("quality_profile") or os.getenv("DEFAULT_QUALITY_PROFILE", "full"))
         profile_cfg = _profile_defaults(profile_name)
+        sync_to_input = _coerce_bool(job_input.get("sync_to_input"), True)
 
         models_root = _ensure_models_root()
         ckpt_path = Path(job_input.get("ckpt_path") or _ensure_checkpoint(models_root))
@@ -242,9 +274,22 @@ def handler(job: dict) -> dict:
         video_ext = Path(urlparse(drive_value).path).suffix or ".mp4"
         ref_image_path = _resolve_input_path(ref_value, work_dir / f"ref{ref_ext}")
         driving_video_path = _resolve_input_path(drive_value, work_dir / f"drive{video_ext}")
+        video_meta = _probe_video_metadata(driving_video_path)
 
         output_video_path = Path(job_input.get("output_video_path") or (work_dir / "output.mp4"))
         pose_preview_path = Path(job_input.get("pose_preview_path") or (work_dir / "pose_preview.mp4"))
+
+        sample_stride_input = job_input.get("sample_stride")
+        fps_input = job_input.get("fps")
+
+        resolved_sample_stride = _coerce_int(
+            sample_stride_input,
+            1 if sync_to_input else profile_cfg["sample_stride"],
+        )
+        if sync_to_input and fps_input is None and video_meta["fps"]:
+            resolved_fps = max(1, int(round(video_meta["fps"])))
+        else:
+            resolved_fps = _coerce_int(fps_input, profile_cfg["fps"])
 
         args = SimpleNamespace(
             base_model_path=str(job_input.get("base_model_path") or os.getenv("BASE_MODEL_PATH", "stabilityai/stable-video-diffusion-img2vid-xt")),
@@ -256,8 +301,8 @@ def handler(job: dict) -> dict:
             height=_coerce_int(job_input.get("height"), profile_cfg["height"]),
             width=_coerce_int(job_input.get("width"), profile_cfg["width"]),
             batch_size=1,
-            sample_stride=_coerce_int(job_input.get("sample_stride"), profile_cfg["sample_stride"]),
-            fps=_coerce_int(job_input.get("fps"), profile_cfg["fps"]),
+            sample_stride=resolved_sample_stride,
+            fps=resolved_fps,
             steps=_coerce_int(job_input.get("steps"), profile_cfg["steps"]),
             guidance_scale=_coerce_float(job_input.get("guidance_scale"), profile_cfg["guidance_scale"]),
             noise_aug_strength=_coerce_float(job_input.get("noise_aug_strength"), profile_cfg["noise_aug_strength"]),
@@ -266,6 +311,8 @@ def handler(job: dict) -> dict:
             vae_decode_chunk_size=_coerce_int(job_input.get("vae_decode_chunk_size"), profile_cfg["vae_decode_chunk_size"]),
             seed=_coerce_int(job_input.get("seed"), 42),
             disable_fp8=_coerce_bool(job_input.get("disable_fp8"), profile_cfg["disable_fp8"]),
+            keep_input_audio=_coerce_bool(job_input.get("keep_input_audio"), True),
+            prefer_gpu_video_codec=_coerce_bool(job_input.get("prefer_gpu_video_codec"), True),
         )
 
         old_cwd = Path.cwd()
@@ -290,12 +337,19 @@ def handler(job: dict) -> dict:
             "fp8_enabled": not args.disable_fp8,
             "config": {
                 "quality_profile": profile_cfg["profile"],
+                "sync_to_input": sync_to_input,
                 "width": args.width,
                 "height": args.height,
                 "steps": args.steps,
                 "sample_stride": args.sample_stride,
                 "fps": args.fps,
                 "vae_decode_chunk_size": args.vae_decode_chunk_size,
+                "keep_input_audio": args.keep_input_audio,
+                "prefer_gpu_video_codec": args.prefer_gpu_video_codec,
+            },
+            "input_video": {
+                "source_fps": video_meta["fps"],
+                "source_frame_count": video_meta["frame_count"],
             },
             "inference": infer_result,
         }

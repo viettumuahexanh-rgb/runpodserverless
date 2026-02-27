@@ -47,6 +47,16 @@ RUN set -eux; \
       cp /workspace/runpod_serverless/loader.py /workspace/MimicMotion/mimicmotion/utils/loader.py; \
     elif [ -f /workspace/loader.py ]; then \
       cp /workspace/loader.py /workspace/MimicMotion/mimicmotion/utils/loader.py; \
+    fi; \
+    if [ -f /workspace/runpod_serverless/preprocess.py ]; then \
+      cp /workspace/runpod_serverless/preprocess.py /workspace/MimicMotion/mimicmotion/dwpose/preprocess.py; \
+    elif [ -f /workspace/preprocess.py ]; then \
+      cp /workspace/preprocess.py /workspace/MimicMotion/mimicmotion/dwpose/preprocess.py; \
+    fi; \
+    if [ -f /workspace/runpod_serverless/wholebody.py ]; then \
+      cp /workspace/runpod_serverless/wholebody.py /workspace/MimicMotion/mimicmotion/dwpose/wholebody.py; \
+    elif [ -f /workspace/wholebody.py ]; then \
+      cp /workspace/wholebody.py /workspace/MimicMotion/mimicmotion/dwpose/wholebody.py; \
     fi
 
 ENV PYTHONPATH="/workspace:/workspace/MimicMotion"

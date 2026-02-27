@@ -34,7 +34,7 @@ docker push <dockerhub-user>/mimicmotion-runpod:0.1.0
 - `HF_TOKEN`: token for private/gated Hugging Face repos.
 - `BASE_MODEL_PATH`: default is `stabilityai/stable-video-diffusion-img2vid-xt`.
 - `MODELS_ROOT`: default is `/runpod-volume/models`.
-- `DEFAULT_QUALITY_PROFILE`: `full` (default) / `balanced` / `low_vram`.
+- `DEFAULT_QUALITY_PROFILE`: `ultra` / `full` (default) / `balanced` / `low_vram`.
 
 ## API input example
 ```json
@@ -59,7 +59,7 @@ docker push <dockerhub-user>/mimicmotion-runpod:0.1.0
 - `ref_image_url` or `ref_image_path` or `ref_image_base64`
 - `driving_video_url` or `driving_video_path` or `driving_video_base64`
 - Optional tuning:
-`steps`, `sample_stride`, `fps`, `seed`, `width`, `height`, `guidance_scale`, `noise_aug_strength`, `tile_size`, `tile_overlap`, `vae_decode_chunk_size`, `disable_fp8`
+`steps`, `sample_stride`, `fps`, `seed`, `width`, `height`, `guidance_scale`, `noise_aug_strength`, `tile_size`, `tile_overlap`, `vae_decode_chunk_size`, `disable_fp8`, `sync_to_input`, `keep_input_audio`, `prefer_gpu_video_codec`
 - Optional upload:
 `output_put_url`, `pose_put_url` (pre-signed PUT URLs)
 - Optional inline return:
@@ -69,6 +69,8 @@ docker push <dockerhub-user>/mimicmotion-runpod:0.1.0
 - `status`: `ok` or `error`
 - `output_video_path`, `pose_preview_path`
 - byte sizes and used config
+- `input_video.source_fps`, `input_video.source_frame_count`
+- `inference.audio_attached`
 - optional `output_upload` / `pose_upload` info when PUT URLs are used
 
 ## Notes
